@@ -1,0 +1,80 @@
+diff --git a/arch/arm/boot/dts/qcom/msm8953-camera.dtsi b/arch/arm/boot/dts/qcom/msm8953-camera.dtsi
+index 51faceeffa20afb90cc74a83318b136a040a1366..1be6cfd45da46a859115782bb83c2d7ce7f39a41 100644
+--- a/arch/arm/boot/dts/qcom/msm8953-camera.dtsi
++++ b/arch/arm/boot/dts/qcom/msm8953-camera.dtsi
+@@ -39,8 +39,9 @@
+ 			<&clock_gcc clk_gcc_camss_ahb_clk>;
+ 		clock-names = "camss_top_ahb_clk", "ispif_ahb_clk",
+ 			"csiphy_timer_src_clk", "csiphy_timer_clk",
+-			"camss_ahb_src", "camss_ahb_clk";
+-		qcom,clock-rates = <0 61540000 200000000 0 0 0>;
++			"camss_ahb_src", "csi_phy_clk",
++			"camss_ahb_clk";
++		qcom,clock-rates = <0 61540000 200000000 0 0 0 0>;
+ 	};
+ 
+ 	qcom,csiphy@1b35000 {
+@@ -61,8 +62,9 @@
+ 			<&clock_gcc clk_gcc_camss_ahb_clk>;
+ 		clock-names = "camss_top_ahb_clk", "ispif_ahb_clk",
+ 			"csiphy_timer_src_clk", "csiphy_timer_clk",
+-			"camss_ahb_src", "camss_ahb_clk";
+-		qcom,clock-rates = <0 61540000 200000000 0 0 0>;
++			"camss_ahb_src", "csi_phy_clk",
++			"camss_ahb_clk";
++		qcom,clock-rates = <0 61540000 200000000 0 0 0 0>;
+ 	};
+ 
+ 	qcom,csiphy@1b36000 {
+@@ -83,8 +85,9 @@
+ 			<&clock_gcc clk_gcc_camss_ahb_clk>;
+ 		clock-names = "camss_top_ahb_clk", "ispif_ahb_clk",
+ 			"csiphy_timer_src_clk", "csiphy_timer_clk",
+-			"camss_ahb_src", "camss_ahb_clk";
+-		qcom,clock-rates = <0 61540000 200000000 0 0 0>;
++			"camss_ahb_src", "csi_phy_clk",
++			"camss_ahb_clk";
++		qcom,clock-rates = <0 61540000 200000000 0 0 0 0>;
+ 	};
+ 
+ 	qcom,csid@1b30000  {
+diff --git a/drivers/media/platform/msm/camera_v2_j7poplte/common/msm_camera_io_util.c b/drivers/media/platform/msm/camera_v2_j7poplte/common/msm_camera_io_util.c
+index 015617058feb10708874a108374771b503fd358c..5e3f570e28da4a8f08bdea16ec702ff2ecfa021b 100755
+--- a/drivers/media/platform/msm/camera_v2_j7poplte/common/msm_camera_io_util.c
++++ b/drivers/media/platform/msm/camera_v2_j7poplte/common/msm_camera_io_util.c
+@@ -265,14 +265,18 @@ int msm_cam_clk_sel_src(struct device *dev, struct msm_cam_clk_info *clk_info,
+ 		if (clk_src_info[i].clk_name) {
+ 			mux_clk = clk_get(dev, clk_info[i].clk_name);
+ 			if (IS_ERR(mux_clk)) {
+-				pr_err("%s get failed\n",
+-					 clk_info[i].clk_name);
++				dev_err(dev,
++					"%s: clk_get clock[%d/%d] name=%s failed: %ld\n",
++					__func__, i, num_clk, clk_info[i].clk_name,
++					PTR_ERR(mux_clk));
+ 				continue;
+ 			}
+ 			src_clk = clk_get(dev, clk_src_info[i].clk_name);
+ 			if (IS_ERR(src_clk)) {
+-				pr_err("%s get failed\n",
+-					clk_src_info[i].clk_name);
++				dev_err(dev,
++					"%s: clk_get clock[%d/%d] name=%s failed: %ld\n",
++					__func__, i, num_clk, clk_src_info[i].clk_name,
++					PTR_ERR(src_clk));
+ 				continue;
+ 			}
+ 			clk_set_parent(mux_clk, src_clk);
+@@ -293,7 +297,11 @@ int msm_cam_clk_enable(struct device *dev, struct msm_cam_clk_info *clk_info,
+ 			CDBG("%s enable %s\n", __func__, clk_info[i].clk_name);
+ 			clk_ptr[i] = clk_get(dev, clk_info[i].clk_name);
+ 			if (IS_ERR(clk_ptr[i])) {
+-				pr_err("%s get failed\n", clk_info[i].clk_name);
++				dev_err(dev,
++					"%s: clk_get clock[%d/%d] name=%s "
++					"requested_rate=%ld failed: %ld\n",
++					__func__, i, num_clk, clk_info[i].clk_name,
++					clk_info[i].clk_rate, PTR_ERR(clk_ptr[i]));
+ 				rc = PTR_ERR(clk_ptr[i]);
+ 				goto cam_clk_get_err;
+ 			}

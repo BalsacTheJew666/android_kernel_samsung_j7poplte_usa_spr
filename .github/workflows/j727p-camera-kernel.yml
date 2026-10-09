@@ -1,0 +1,100 @@
+name: J727P camera kernel
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [j727p-camera-build]
+    paths:
+      - '.github/workflows/j727p-camera-kernel.yml'
+      - 'scripts/**'
+      - 'patches/**'
+  pull_request:
+    paths:
+      - '.github/workflows/j727p-camera-kernel.yml'
+      - 'scripts/**'
+      - 'patches/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: j727p-camera-kernel-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      LOG_DIR: ${{ github.workspace }}/logs
+      ARTIFACT_DIR: ${{ github.workspace }}/artifacts
+    steps:
+      - name: Check out build project
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          mkdir -p "$LOG_DIR" "$ARTIFACT_DIR"
+          sudo apt-get update 2>&1 | tee "$LOG_DIR/apt-update.log"
+          sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev \
+            python3 git curl xz-utils zip 2>&1 | tee "$LOG_DIR/apt-install.log"
+
+      - name: Patch, verify, configure and compile
+        env:
+          KERNEL_DIR: ${{ runner.temp }}/j727p-kernel
+          TOOLCHAIN_DIR: ${{ runner.temp }}/android-gcc49
+          OUT_DIR: ${{ runner.temp }}/j727p-out
+        run: bash scripts/build_kernel.sh
+
+      - name: Upload kernel and configuration
+        if: success()
+        id: kernel
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: j727p-Image-gz-dtb-${{ github.run_id }}
+          path: |
+            artifacts/Image.gz-dtb
+            artifacts/kernel.config
+            artifacts/SHA256SUMS
+            artifacts/build-info.txt
+            artifacts/j727p-camera.patch
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload patch, configuration and logs
+        if: always()
+        id: diagnostics
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: j727p-patch-and-logs-${{ github.run_id }}
+          path: |
+            logs/
+            artifacts/
+            patches/j727p-camera.patch
+            scripts/
+            .github/workflows/j727p-camera-kernel.yml
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+
+      - name: Record result and artifact links
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+          KERNEL_URL: ${{ steps.kernel.outputs.artifact-url }}
+          DIAGNOSTICS_URL: ${{ steps.diagnostics.outputs.artifact-url }}
+        run: |
+          {
+            echo "J727P kernel build: $JOB_STATUS"
+            echo
+            echo "Source: Galaxy-MSM8953/android_kernel_samsung_msm8953 lineage-16.0"
+            echo "Pinned source: 353d0e99d2e825e6517881c4df6011332aa75b31"
+            echo "Kernel artifact: $KERNEL_URL"
+            echo "Patch and logs: $DIAGNOSTICS_URL"
+            echo
+            echo "No device was flashed. Camera operation requires testing on the SM-J727P."
+          } >> "$GITHUB_STEP_SUMMARY"

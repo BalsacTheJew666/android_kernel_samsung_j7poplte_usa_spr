@@ -1,0 +1,6 @@
+/kernel/
+/toolchains/
+/out/
+/logs/
+/artifacts/
+__pycache__/
