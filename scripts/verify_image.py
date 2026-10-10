@@ -131,7 +131,8 @@ def clock_constants(kernel):
         header.read_text(), re.MULTILINE)}
 
 
-def verify_csiphy(nodes, constants):
+def clock_providers(nodes):
+    """Index provider phandles once for all camera controller checks."""
     phandles = {}
     for path, properties in nodes.items():
         handles = [one_cell(properties, name) for name in ("phandle", "linux,phandle")
@@ -142,6 +143,28 @@ def verify_csiphy(nodes, constants):
             require(handle not in (0, 0xFFFFFFFF) and handle not in phandles,
                     f"invalid/duplicate phandle {handle:#x}")
             phandles[handle] = (path, properties)
+    return phandles
+
+
+def gcc_clock_specifiers(properties, phandles, controller):
+    raw = cells(properties["clocks"])
+    specifiers = []
+    cursor = 0
+    while cursor < len(raw):
+        handle = raw[cursor]
+        require(handle in phandles, f"{controller} unresolved clock provider {handle:#x}")
+        provider_path, provider = phandles[handle]
+        count = one_cell(provider, "#clock-cells")
+        require(count == 1, f"unexpected clock provider cell count at {provider_path}")
+        require(cursor + 1 + count <= len(raw), f"truncated {controller} clock specifier")
+        require("qcom,gcc-8953" in strings(provider["compatible"]),
+                f"unexpected {controller} provider {provider_path}")
+        specifiers.append(raw[cursor + 1])
+        cursor += 1 + count
+    return specifiers
+
+
+def verify_csiphy(nodes, constants, phandles):
     csiphy = [(path, properties) for path, properties in nodes.items()
               if "compatible" in properties
               and "qcom,csiphy" in strings(properties["compatible"])]
@@ -158,20 +181,7 @@ def verify_csiphy(nodes, constants):
         require(names == expected_names, f"CSIPHY{index} clock names/order differ: {names}")
         require(rates == [0, 61540000, 200000000, 0, 0, 0, 0],
                 f"CSIPHY{index} clock rates/order differ: {rates}")
-        raw = cells(properties["clocks"])
-        specifiers = []
-        cursor = 0
-        while cursor < len(raw):
-            handle = raw[cursor]
-            require(handle in phandles, f"CSIPHY{index} unresolved clock provider {handle:#x}")
-            provider_path, provider = phandles[handle]
-            count = one_cell(provider, "#clock-cells")
-            require(count == 1, f"unexpected clock provider cell count at {provider_path}")
-            require(cursor + 1 + count <= len(raw), f"truncated CSIPHY{index} clock specifier")
-            require("qcom,gcc-8953" in strings(provider["compatible"]),
-                    f"unexpected CSIPHY{index} provider {provider_path}")
-            specifiers.append(raw[cursor + 1])
-            cursor += 1 + count
+        specifiers = gcc_clock_specifiers(properties, phandles, f"CSIPHY{index}")
         identifiers = ["clk_gcc_camss_top_ahb_clk", "clk_gcc_camss_ispif_ahb_clk",
                        f"clk_csi{index}phytimer_clk_src", f"clk_gcc_camss_csi{index}phytimer_clk",
                        "clk_camss_top_ahb_clk_src", f"clk_gcc_camss_csi{index}phy_clk",
@@ -181,6 +191,60 @@ def verify_csiphy(nodes, constants):
         print(f"  CSIPHY{index}: 7 references/names/rates; index 5 csi_phy_clk -> "
               f"{identifiers[5]} ({specifiers[5]:#x}); index 6 camss_ahb_clk -> "
               f"{identifiers[6]} ({specifiers[6]:#x})")
+
+
+def verify_csid(nodes, constants, phandles):
+    csid = [(path, properties) for path, properties in nodes.items()
+            if "compatible" in properties
+            and "qcom,csid" in strings(properties["compatible"])]
+    require(len(csid) == 3, f"expected three CSID nodes, found {len(csid)}")
+    indices = set()
+    for path, properties in csid:
+        index = one_cell(properties, "cell-index")
+        require(index in (0, 1, 2) and index not in indices, f"invalid CSID index at {path}")
+        indices.add(index)
+        address = 0x1B30000 + index * 0x400
+        require(path == f"/soc/qcom,csid@{address:x}",
+                f"CSID{index} actual device-tree node differs: {path}")
+        require(strings(properties["compatible"]) == ["qcom,csid-v3.5.1", "qcom,csid"],
+                f"CSID{index} compatibility differs at {path}")
+        require(strings(properties["status"]) in (["ok"], ["okay"]),
+                f"CSID{index} is disabled at {path}")
+        require(cells(properties["reg"]) == [address, 0x400],
+                f"CSID{index} register range differs at {path}")
+        expected_names = ["camss_top_ahb_clk", "ispif_ahb_clk", "csi_ahb_clk", "csi_src_clk",
+                          f"csi{index}_phy_clk", "csi_clk", "csi_pix_clk", "csi_rdi_clk",
+                          "camss_ahb_clk"]
+        names = strings(properties["clock-names"])
+        rates = cells(properties["qcom,clock-rates"])
+        require(names == expected_names, f"CSID{index} clock names/order differ: {names}")
+        require(rates == [0, 61540000, 0, 310000000, 0, 0, 0, 0, 0],
+                f"CSID{index} clock rates/order differ: {rates}")
+        specifiers = gcc_clock_specifiers(properties, phandles, f"CSID{index}")
+        identifiers = ["clk_gcc_camss_top_ahb_clk", "clk_gcc_camss_ispif_ahb_clk",
+                       f"clk_gcc_camss_csi{index}_ahb_clk", f"clk_csi{index}_clk_src",
+                       f"clk_gcc_camss_csi{index}phy_clk", f"clk_gcc_camss_csi{index}_clk",
+                       f"clk_gcc_camss_csi{index}pix_clk", f"clk_gcc_camss_csi{index}rdi_clk",
+                       "clk_gcc_camss_ahb_clk"]
+        require(specifiers == [constants[name] for name in identifiers],
+                f"CSID{index} compiled clock IDs/order differ: {specifiers}")
+        print(f"  CSID{index}: node={path}; 9 references/names/rates; "
+              f"index 4 {names[4]} -> {identifiers[4]} ({specifiers[4]:#x})")
+
+
+def verify_csid_compilation(out):
+    source = "drivers/media/platform/msm/camera_v2_j7poplte/sensor/csid/msm_csid.c"
+    directory = out / Path(source).parent
+    object_file = directory / "msm_csid.o"
+    header = object_file.read_bytes()[:20]
+    require(len(header) == 20 and header[:6] == b"\x7fELF\x02\x01"
+            and struct.unpack_from("<H", header, 18)[0] == 183,
+            "active CSID object is not an ARM64 ELF object")
+    command = (directory / ".msm_csid.o.cmd").read_text()
+    assignments = re.findall(r"^cmd_\S+\s*:=\s*(.+)$", command, re.MULTILINE)
+    require(len(assignments) == 1 and source in assignments[0],
+            "saved CSID compilation command does not select camera_v2_j7poplte")
+    print(f"Verified active ARM64 CSID object and saved compiler command: {source}")
 
 
 def kbuild_inputs(out):
@@ -203,9 +267,11 @@ def kbuild_inputs(out):
 
 def verify(kernel, out):
     configuration = (out / ".config").read_text().splitlines()
-    for expected in ("CONFIG_ARM64=y", "CONFIG_ARCH_MSM8953=y",
+    for expected in ("CONFIG_ARM64=y", "CONFIG_ARCH_MSM8953=y", "CONFIG_MSMB_CAMERA=y",
+                     "CONFIG_MSM_CSID=y",
                      "CONFIG_SEC_J7POPLTE_USA_SPR=y", "CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE=y"):
         require(expected in configuration, f"missing required build setting: {expected}")
+    verify_csid_compilation(out)
     inputs = kbuild_inputs(out)
     image_file = out / "arch/arm64/boot/Image.gz-dtb"
     image = image_file.read_bytes()
@@ -231,7 +297,9 @@ def verify(kernel, out):
         model = strings(nodes["/"]["model"])
         require(model == ["Samsung Electronics. j7poplte_usa_spr"],
                 f"incorrect device model in {path.name}: {model}")
-        verify_csiphy(nodes, constants)
+        phandles = clock_providers(nodes)
+        verify_csiphy(nodes, constants, phandles)
+        verify_csid(nodes, constants, phandles)
         result = subprocess.run([str(dtc), "-I", "dtb", "-O", "dts", "-o",
                                  str(verification_dir / (path.stem + ".dts")), str(path)],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)

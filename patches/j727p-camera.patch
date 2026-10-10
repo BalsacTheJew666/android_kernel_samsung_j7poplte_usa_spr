@@ -78,3 +78,471 @@ index 015617058feb10708874a108374771b503fd358c..5e3f570e28da4a8f08bdea16ec702ff2
  				rc = PTR_ERR(clk_ptr[i]);
  				goto cam_clk_get_err;
  			}
+diff --git a/drivers/media/platform/msm/camera_v2_j7poplte/sensor/csid/msm_csid.c b/drivers/media/platform/msm/camera_v2_j7poplte/sensor/csid/msm_csid.c
+index 0fb1def6065987fcb94ce05efc481448461ad4b4..cfe32eecb7eb3e0ced09325de2f6bc1de5d82c2d 100755
+--- a/drivers/media/platform/msm/camera_v2_j7poplte/sensor/csid/msm_csid.c
++++ b/drivers/media/platform/msm/camera_v2_j7poplte/sensor/csid/msm_csid.c
+@@ -66,9 +66,6 @@
+ #undef CDBG
+ #define CDBG(fmt, args...) pr_debug(fmt, ##args)
+ 
+-static struct msm_cam_clk_info csid_clk_info[CSID_NUM_CLK_MAX];
+-static struct msm_cam_clk_info csid_clk_src_info[CSID_NUM_CLK_MAX];
+-
+ static struct camera_vreg_t csid_vreg_info[] = {
+ 	{"qcom,mipi-csi-vdd", 0, 0, 12000},
+ };
+@@ -404,8 +401,8 @@ static irqreturn_t msm_csid_irq(int irq_num, void *data)
+ 	uint32_t count = 0, dt = 0;
+ 	struct csid_device *csid_dev = data;
+ 
+-	if (!csid_dev) {
+-		pr_err("%s:%d csid_dev NULL\n", __func__, __LINE__);
++	if (!csid_dev || !csid_dev->base) {
++		pr_err("%s:%d csid_dev or base NULL\n", __func__, __LINE__);
+ 		return IRQ_HANDLED;
+ 	}
+ 	irq = msm_camera_io_r(csid_dev->base +
+@@ -436,8 +433,8 @@ static irqreturn_t msm_csid_irq(int irq_num, void *data)
+ 	uint32_t irq;
+ 	struct csid_device *csid_dev = data;
+ 
+-	if (!csid_dev) {
+-		pr_err("%s:%d csid_dev NULL\n", __func__, __LINE__);
++	if (!csid_dev || !csid_dev->base) {
++		pr_err("%s:%d csid_dev or base NULL\n", __func__, __LINE__);
+ 		return IRQ_HANDLED;
+ 	}
+ 	irq = msm_camera_io_r(csid_dev->base +
+@@ -464,6 +461,30 @@ static int msm_csid_irq_routine(struct v4l2_subdev *sd, u32 status,
+ 	return 0;
+ }
+ 
++/* Log the names used for clk_get(), after validated DT reads. */
++static void msm_csid_log_phy_clocks(struct csid_device *csid_dev,
++	const char *stage)
++{
++	uint32_t i;
++	const char *name;
++	struct device_node *of_node = csid_dev->pdev->dev.of_node;
++
++	for (i = 0; i < csid_dev->num_clk; i++) {
++		name = csid_dev->csid_clk_info[i].clk_name;
++		if (name && strstr(name, "phy"))
++			pr_info("CSID%d node=%s %s PHY clock[%u]=%s\n",
++				csid_dev->pdev->id, of_node->full_name, stage,
++				i, name);
++	}
++	for (i = 0; i < csid_dev->num_clk_src_info; i++) {
++		name = csid_dev->csid_clk_src_info[i].clk_name;
++		if (name && strstr(name, "phy"))
++			pr_info("CSID%d node=%s %s PHY source[%u]=%s\n",
++				csid_dev->pdev->id, of_node->full_name, stage,
++				i, name);
++	}
++}
++
+ static int msm_csid_init(struct csid_device *csid_dev, uint32_t *csid_version)
+ {
+ 	int rc = 0;
+@@ -544,17 +565,19 @@ static int msm_csid_init(struct csid_device *csid_dev, uint32_t *csid_version)
+ 		goto csid_vreg_enable_failed;
+ 	}
+ 
++	msm_csid_log_phy_clocks(csid_dev, "init requesting");
+ 	if (csid_dev->ctrl_reg->csid_reg.csid_version == CSID_VERSION_V22)
+ 		msm_cam_clk_sel_src(&csid_dev->pdev->dev,
+-			&csid_clk_info[3], csid_clk_src_info,
++			&csid_dev->csid_clk_info[3], csid_dev->csid_clk_src_info,
+ 			csid_dev->num_clk_src_info);
+ 
+ 	rc = msm_cam_clk_enable(&csid_dev->pdev->dev,
+-			csid_clk_info, csid_dev->csid_clk,
++			csid_dev->csid_clk_info, csid_dev->csid_clk,
+ 			csid_dev->num_clk, 1);
+ 	if (rc < 0) {
+-		pr_err("%s:%d clock enable failed\n",
+-			 __func__, __LINE__);
++		pr_err("CSID%d node=%s clock enable failed rc=%d\n",
++			csid_dev->pdev->id,
++			csid_dev->pdev->dev.of_node->full_name, rc);
+ 		goto clk_enable_failed;
+ 	}
+ 	CDBG("%s:%d called\n", __func__, __LINE__);
+@@ -583,7 +606,7 @@ static int msm_csid_init(struct csid_device *csid_dev, uint32_t *csid_version)
+ 
+ msm_csid_reset_fail:
+ 	disable_irq(csid_dev->irq->start);
+-	msm_cam_clk_enable(&csid_dev->pdev->dev, csid_clk_info,
++	msm_cam_clk_enable(&csid_dev->pdev->dev, csid_dev->csid_clk_info,
+ 		csid_dev->csid_clk, csid_dev->num_clk, 0);
+ clk_enable_failed:
+ 	if (csid_dev->ctrl_reg->csid_reg.csid_version < CSID_VERSION_V22) {
+@@ -646,7 +669,7 @@ static int msm_csid_release(struct csid_device *csid_dev)
+ 	disable_irq(csid_dev->irq->start);
+ 
+ 	if (csid_dev->hw_version == CSID_VERSION_V20) {
+-		msm_cam_clk_enable(&csid_dev->pdev->dev, csid_clk_info,
++		msm_cam_clk_enable(&csid_dev->pdev->dev, csid_dev->csid_clk_info,
+ 			csid_dev->csid_clk, csid_dev->num_clk, 0);
+ 
+ 		msm_camera_enable_vreg(&csid_dev->pdev->dev,
+@@ -658,7 +681,7 @@ static int msm_csid_release(struct csid_device *csid_dev)
+ 			NULL, 0, &csid_dev->csi_vdd, 0);
+ 	} else {
+ 		msm_cam_clk_enable(&csid_dev->pdev->dev,
+-			csid_clk_info,
++			csid_dev->csid_clk_info,
+ 			csid_dev->csid_clk,
+ 			csid_dev->num_clk, 0);
+ 
+@@ -1014,8 +1037,8 @@ static const struct v4l2_subdev_ops msm_csid_subdev_ops = {
+ static int msm_csid_get_clk_info(struct csid_device *csid_dev,
+ 	struct platform_device *pdev)
+ {
+-	uint32_t count;
+-	uint32_t cnt = 0;
++	int count;
++	int cnt = 0;
+ 	int i, rc;
+ 	int ii = 0;
+ 	uint32_t rates[CSID_NUM_CLK_MAX];
+@@ -1024,13 +1047,11 @@ static int msm_csid_get_clk_info(struct csid_device *csid_dev,
+ 	of_node = pdev->dev.of_node;
+ 
+ 	count = of_property_count_strings(of_node, "clock-names");
+-	csid_dev->num_clk = count;
+-
+ 	CDBG("%s: count = %d\n", __func__, count);
+-	if (count == 0) {
+-		pr_err("%s: no clocks found in device tree, count=%d",
++	if (count <= 0) {
++		pr_err("%s: no clocks found in device tree, count=%d\n",
+ 			__func__, count);
+-		return -EINVAL;
++		return count < 0 ? count : -EINVAL;
+ 	}
+ 
+ 	if (count > CSID_NUM_CLK_MAX) {
+@@ -1038,6 +1059,7 @@ static int msm_csid_get_clk_info(struct csid_device *csid_dev,
+ 			count, CSID_NUM_CLK_MAX);
+ 		return -EINVAL;
+ 	}
++	csid_dev->num_clk = count;
+ 
+ 	if (csid_dev->hw_dts_version == CSID_VERSION_V22) {
+ 		cnt = count;
+@@ -1047,27 +1069,32 @@ static int msm_csid_get_clk_info(struct csid_device *csid_dev,
+ 			count++;
+ 			rc = of_property_read_string_index(of_node,
+ 				"clock-names", i, &clock_name);
+-			CDBG("%s: clock_names[%d] = %s\n", __func__,
+-				i, clock_name);
+ 			if (rc < 0) {
+ 				pr_err("%s:%d, failed\n", __func__, __LINE__);
+ 				return rc;
+ 			}
++			CDBG("%s: clock_names[%d] = %s\n", __func__,
++				i, clock_name);
+ 			if (strcmp(clock_name, "csi_phy_src_clk") == 0)
+ 				break;
+ 		}
++		/* Keep the legacy source slot zero and mux offset of three. */
++		if (i == cnt || count < 3 || cnt - count > count - 3) {
++			pr_err("%s: invalid v2.2 clock/source layout\n", __func__);
++			return -EINVAL;
++		}
+ 		csid_dev->num_clk = count;
+ 	}
+ 
+ 	for (i = 0; i < count; i++) {
+ 		rc = of_property_read_string_index(of_node, "clock-names",
+-				i, &(csid_clk_info[i].clk_name));
+-		CDBG("%s: clock-names[%d] = %s\n", __func__,
+-			i, csid_clk_info[i].clk_name);
++				i, &(csid_dev->csid_clk_info[i].clk_name));
+ 		if (rc < 0) {
+ 			pr_err("%s:%d, failed\n", __func__, __LINE__);
+ 			return rc;
+ 		}
++		CDBG("%s: clock-names[%d] = %s\n", __func__,
++			i, csid_dev->csid_clk_info[i].clk_name);
+ 	}
+ 	rc = of_property_read_u32_array(of_node, "qcom,clock-rates",
+ 		rates, count);
+@@ -1076,16 +1103,16 @@ static int msm_csid_get_clk_info(struct csid_device *csid_dev,
+ 		return rc;
+ 	}
+ 	for (i = 0; i < count; i++) {
+-		csid_clk_info[i].clk_rate = (rates[i] == 0) ?
++		csid_dev->csid_clk_info[i].clk_rate = (rates[i] == 0) ?
+ 			(long)-1 : rates[i];
+-		if (!strcmp(csid_clk_info[i].clk_name, "csi_src_clk")) {
++		if (!strcmp(csid_dev->csid_clk_info[i].clk_name, "csi_src_clk")) {
+ 			CDBG("%s:%d, copy csi_src_clk",
+ 				__func__, __LINE__);
+ 			csid_dev->csid_max_clk = rates[i];
+ 			csid_dev->csid_clk_index = i;
+ 		}
+ 		CDBG("%s: clk_rate[%d] = %ld\n", __func__, i,
+-			csid_clk_info[i].clk_rate);
++			csid_dev->csid_clk_info[i].clk_rate);
+ 	}
+ 
+ 	if (csid_dev->hw_dts_version == CSID_VERSION_V22) {
+@@ -1096,13 +1123,13 @@ static int msm_csid_get_clk_info(struct csid_device *csid_dev,
+ 			ii++;
+ 			rc = of_property_read_string_index(of_node,
+ 				"clock-names", i,
+-				&(csid_clk_src_info[ii].clk_name));
+-			CDBG("%s: clock-names[%d] = %s\n", __func__,
+-				ii, csid_clk_src_info[ii].clk_name);
++				&(csid_dev->csid_clk_src_info[ii].clk_name));
+ 			if (rc < 0) {
+ 				pr_err("%s:%d, failed\n", __func__, __LINE__);
+ 				return rc;
+ 			}
++			CDBG("%s: clock-names[%d] = %s\n", __func__,
++				ii, csid_dev->csid_clk_src_info[ii].clk_name);
+ 		}
+ 		ii = 0;
+ 		rc = of_property_read_u32_array(of_node, "qcom,clock-rates",
+@@ -1113,11 +1140,12 @@ static int msm_csid_get_clk_info(struct csid_device *csid_dev,
+ 		}
+ 		for (i = count; i < cnt; i++) {
+ 			ii++;
+-			csid_clk_src_info[ii].clk_rate = rates[i];
++			csid_dev->csid_clk_src_info[ii].clk_rate = rates[i];
+ 			CDBG("%s: clk_rate[%d] = %ld\n", __func__, ii,
+-			csid_clk_src_info[ii].clk_rate);
++			csid_dev->csid_clk_src_info[ii].clk_rate);
+ 		}
+ 	}
++	msm_csid_log_phy_clocks(csid_dev, "probe configured");
+ 	return 0;
+ }
+ 
+@@ -1144,8 +1172,14 @@ static int csid_probe(struct platform_device *pdev)
+ 
+ 	v4l2_subdev_init(&new_csid_dev->msm_sd.sd, &msm_csid_subdev_ops);
+ 	v4l2_set_subdevdata(&new_csid_dev->msm_sd.sd, new_csid_dev);
+-	platform_set_drvdata(pdev, &new_csid_dev->msm_sd.sd);
++	new_csid_dev->pdev = pdev;
+ 	mutex_init(&new_csid_dev->mutex);
++	INIT_LIST_HEAD(&new_csid_dev->msm_sd.list);
++	init_completion(&new_csid_dev->reset_complete);
++	if (!pdev->dev.of_node) {
++		rc = -EINVAL;
++		goto csid_no_resource;
++	}
+ 
+ 	if (pdev->dev.of_node) {
+ 		rc = of_property_read_u32((&pdev->dev)->of_node,
+@@ -1171,86 +1205,6 @@ static int csid_probe(struct platform_device *pdev)
+ 		csid_vreg_info[0].max_voltage = csi_vdd_voltage;
+ 	}
+ 
+-	rc = msm_csid_get_clk_info(new_csid_dev, pdev);
+-	if (rc < 0) {
+-		pr_err("%s: msm_csid_get_clk_info() failed", __func__);
+-		rc = -EFAULT;
+-		goto csid_no_resource;
+-	}
+-
+-	rc = msm_camera_get_dt_vreg_data(pdev->dev.of_node,
+-		&(new_csid_dev->csid_vreg), &(new_csid_dev->regulator_count));
+-	if (rc < 0) {
+-		pr_err("%s: get vreg data from dtsi fail\n", __func__);
+-		rc = -EFAULT;
+-		goto csid_no_resource;
+-	}
+-
+-	if ((new_csid_dev->regulator_count < 0) ||
+-		(new_csid_dev->regulator_count > MAX_REGULATOR)) {
+-		pr_err("%s: invalid reg count = %d, max is %d\n", __func__,
+-			new_csid_dev->regulator_count, MAX_REGULATOR);
+-		rc = -EFAULT;
+-		goto csid_no_resource;
+-	}
+-
+-	new_csid_dev->mem = platform_get_resource_byname(pdev,
+-					IORESOURCE_MEM, "csid");
+-	if (!new_csid_dev->mem) {
+-		pr_err("%s: no mem resource?\n", __func__);
+-		rc = -ENODEV;
+-		goto csid_invalid_vreg_data;
+-	}
+-	new_csid_dev->irq = platform_get_resource_byname(pdev,
+-					IORESOURCE_IRQ, "csid");
+-	if (!new_csid_dev->irq) {
+-		pr_err("%s: no irq resource?\n", __func__);
+-		rc = -ENODEV;
+-		goto csid_invalid_vreg_data;
+-	}
+-	new_csid_dev->io = request_mem_region(new_csid_dev->mem->start,
+-		resource_size(new_csid_dev->mem), pdev->name);
+-	if (!new_csid_dev->io) {
+-		pr_err("%s: no valid mem region\n", __func__);
+-		rc = -EBUSY;
+-		goto csid_invalid_vreg_data;
+-	}
+-
+-	new_csid_dev->pdev = pdev;
+-	new_csid_dev->msm_sd.sd.internal_ops = &msm_csid_internal_ops;
+-	new_csid_dev->msm_sd.sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
+-	snprintf(new_csid_dev->msm_sd.sd.name,
+-			ARRAY_SIZE(new_csid_dev->msm_sd.sd.name), "msm_csid");
+-	media_entity_init(&new_csid_dev->msm_sd.sd.entity, 0, NULL, 0);
+-	new_csid_dev->msm_sd.sd.entity.type = MEDIA_ENT_T_V4L2_SUBDEV;
+-	new_csid_dev->msm_sd.sd.entity.group_id = MSM_CAMERA_SUBDEV_CSID;
+-	new_csid_dev->msm_sd.close_seq = MSM_SD_CLOSE_2ND_CATEGORY | 0x5;
+-	msm_sd_register(&new_csid_dev->msm_sd);
+-
+-#ifdef CONFIG_COMPAT
+-	msm_cam_copy_v4l2_subdev_fops(&msm_csid_v4l2_subdev_fops);
+-	msm_csid_v4l2_subdev_fops.compat_ioctl32 = msm_csid_subdev_fops_ioctl32;
+-	new_csid_dev->msm_sd.sd.devnode->fops = &msm_csid_v4l2_subdev_fops;
+-#endif
+-
+-	rc = request_irq(new_csid_dev->irq->start, msm_csid_irq,
+-		IRQF_TRIGGER_RISING, "csid", new_csid_dev);
+-	if (rc < 0) {
+-		release_mem_region(new_csid_dev->mem->start,
+-			resource_size(new_csid_dev->mem));
+-		pr_err("%s: irq request fail\n", __func__);
+-		rc = -EBUSY;
+-		goto csid_invalid_vreg_data;
+-	}
+-	disable_irq(new_csid_dev->irq->start);
+-	if (rc < 0) {
+-		release_mem_region(new_csid_dev->mem->start,
+-			resource_size(new_csid_dev->mem));
+-		pr_err("%s Error registering irq ", __func__);
+-		rc = -EBUSY;
+-		goto csid_invalid_vreg_data;
+-	}
+-
+ 	if (of_device_is_compatible(new_csid_dev->pdev->dev.of_node,
+ 		"qcom,csid-v2.0")) {
+ 		new_csid_dev->ctrl_reg->csid_reg = csid_v2_0;
+@@ -1327,12 +1281,98 @@ static int csid_probe(struct platform_device *pdev)
+ 		pr_err("%s:%d, invalid hw version : 0x%x", __func__, __LINE__,
+ 			new_csid_dev->hw_dts_version);
+ 		rc = -EINVAL;
++		goto csid_no_resource;
++	}
++
++	rc = msm_csid_get_clk_info(new_csid_dev, pdev);
++	if (rc < 0) {
++		pr_err("CSID%d node=%s clock metadata failed rc=%d\n",
++			pdev->id, pdev->dev.of_node->full_name, rc);
++		goto csid_no_resource;
++	}
++
++	rc = msm_camera_get_dt_vreg_data(pdev->dev.of_node,
++		&(new_csid_dev->csid_vreg), &(new_csid_dev->regulator_count));
++	if (rc < 0) {
++		pr_err("%s: get vreg data from dtsi fail\n", __func__);
++		/* The DT helper already frees this allocation on error. */
++		new_csid_dev->csid_vreg = NULL;
++		goto csid_no_resource;
++	}
++
++	if ((new_csid_dev->regulator_count < 0) ||
++		(new_csid_dev->regulator_count > MAX_REGULATOR)) {
++		pr_err("%s: invalid reg count = %d, max is %d\n", __func__,
++			new_csid_dev->regulator_count, MAX_REGULATOR);
++		rc = -EFAULT;
+ 		goto csid_invalid_vreg_data;
+ 	}
+ 
++	new_csid_dev->mem = platform_get_resource_byname(pdev,
++					IORESOURCE_MEM, "csid");
++	if (!new_csid_dev->mem) {
++		pr_err("%s: no mem resource?\n", __func__);
++		rc = -ENODEV;
++		goto csid_invalid_vreg_data;
++	}
++	new_csid_dev->irq = platform_get_resource_byname(pdev,
++					IORESOURCE_IRQ, "csid");
++	if (!new_csid_dev->irq) {
++		pr_err("%s: no irq resource?\n", __func__);
++		rc = -ENODEV;
++		goto csid_invalid_vreg_data;
++	}
++	new_csid_dev->io = request_mem_region(new_csid_dev->mem->start,
++		resource_size(new_csid_dev->mem), pdev->name);
++	if (!new_csid_dev->io) {
++		pr_err("%s: no valid mem region\n", __func__);
++		rc = -EBUSY;
++		goto csid_invalid_vreg_data;
++	}
++
++	rc = request_irq(new_csid_dev->irq->start, msm_csid_irq,
++		IRQF_TRIGGER_RISING, "csid", new_csid_dev);
++	if (rc < 0) {
++		pr_err("%s: irq request fail\n", __func__);
++		goto csid_release_mem;
++	}
++	disable_irq(new_csid_dev->irq->start);
++
+ 	new_csid_dev->csid_state = CSID_POWER_DOWN;
++	new_csid_dev->msm_sd.sd.internal_ops = &msm_csid_internal_ops;
++	new_csid_dev->msm_sd.sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
++	snprintf(new_csid_dev->msm_sd.sd.name,
++			ARRAY_SIZE(new_csid_dev->msm_sd.sd.name), "msm_csid");
++	rc = media_entity_init(&new_csid_dev->msm_sd.sd.entity, 0, NULL, 0);
++	if (rc < 0)
++		goto csid_free_irq;
++	new_csid_dev->msm_sd.sd.entity.type = MEDIA_ENT_T_V4L2_SUBDEV;
++	new_csid_dev->msm_sd.sd.entity.group_id = MSM_CAMERA_SUBDEV_CSID;
++	new_csid_dev->msm_sd.close_seq = MSM_SD_CLOSE_2ND_CATEGORY | 0x5;
++	rc = msm_sd_register(&new_csid_dev->msm_sd);
++	if (rc < 0) {
++		/* msm_sd_register adds its ordered-list entry before registration. */
++		list_del_init(&new_csid_dev->msm_sd.list);
++		msm_sd_unregister(&new_csid_dev->msm_sd);
++		goto csid_entity_cleanup;
++	}
++
++#ifdef CONFIG_COMPAT
++	msm_cam_copy_v4l2_subdev_fops(&msm_csid_v4l2_subdev_fops);
++	msm_csid_v4l2_subdev_fops.compat_ioctl32 = msm_csid_subdev_fops_ioctl32;
++	new_csid_dev->msm_sd.sd.devnode->fops = &msm_csid_v4l2_subdev_fops;
++#endif
++
++	platform_set_drvdata(pdev, &new_csid_dev->msm_sd.sd);
+ 	return 0;
+ 
++csid_entity_cleanup:
++	media_entity_cleanup(&new_csid_dev->msm_sd.sd.entity);
++csid_free_irq:
++	free_irq(new_csid_dev->irq->start, new_csid_dev);
++csid_release_mem:
++	release_mem_region(new_csid_dev->mem->start,
++		resource_size(new_csid_dev->mem));
+ csid_invalid_vreg_data:
+ 	kfree(new_csid_dev->csid_vreg);
+ csid_no_resource:
+diff --git a/drivers/media/platform/msm/camera_v2_j7poplte/sensor/csid/msm_csid.h b/drivers/media/platform/msm/camera_v2_j7poplte/sensor/csid/msm_csid.h
+index b5b29abdfc729f303535fb460899779aef6f3282..1a875c3c3073b511515e7f9a18e4733302f401e7 100755
+--- a/drivers/media/platform/msm/camera_v2_j7poplte/sensor/csid/msm_csid.h
++++ b/drivers/media/platform/msm/camera_v2_j7poplte/sensor/csid/msm_csid.h
+@@ -18,6 +18,7 @@
+ #include <linux/platform_device.h>
+ #include <media/v4l2-subdev.h>
+ #include "../../include/media/msm_cam_sensor.h"
++#include "../../include/soc/qcom/camera2.h"
+ #include "msm_sd.h"
+ 
+ #define CSID_NUM_CLK_MAX  16
+@@ -103,6 +104,9 @@ struct csid_device {
+ 	uint32_t num_clk;
+ 	uint32_t num_clk_src_info;
+ 	struct regulator *reg_ptr;
++	/* Clock metadata belongs to this controller, not the last probe. */
++	struct msm_cam_clk_info csid_clk_info[CSID_NUM_CLK_MAX];
++	struct msm_cam_clk_info csid_clk_src_info[CSID_NUM_CLK_MAX];
+ 	struct clk *csid_clk[CSID_NUM_CLK_MAX];
+ 	uint32_t csid_clk_index;
+ 	uint32_t csid_max_clk;

@@ -8,7 +8,39 @@ at lineage-16.0 commit `353d0e99d2e825e6517881c4df6011332aa75b31`.
 The project lives on the `j727p-camera-build` branch. Its source is the pinned
 Galaxy-MSM8953 tree fetched into a separate build directory.
 
-## Clock correction and diagnostics
+## Camera patch v2
+
+The pinned active CSID driver originally kept `csid_clk_info` and
+`csid_clk_src_info` in static global arrays. Probing CSID1 and CSID2 overwrote
+CSID0's clock names, so CSID0 could request `csi2_phy_clk` from its own DT node
+and fail with `-ENOENT` (`-2`). V2 embeds both fixed-size arrays in each
+`csid_device`, alongside its existing clock handles, and uses that instance at
+every initialization, enable, disable, reset unwind, and source-selection site.
+The arrays share the device's allocation and lifetime; no extra allocation or
+clock reference is introduced.
+
+The initialization audit also keeps negative DT count errors signed, checks
+string reads before logging, bounds the legacy source-selection window, and
+sets hardware compatibility before parsing clocks. Probe publishes the subdevice
+after its metadata, hardware state, and IRQ are ready. Failed registration
+removes the ordered-list entry and releases the subdevice, media entity, IRQ,
+memory reservation, and regulator data. IRQ handlers reject a missing MMIO base.
+Existing per-instance ioctl mutexes continue to serialize runtime operations.
+
+The unchanged CSID DT mappings are:
+
+| Controller | Actual DT node | Requested PHY clock | GCC reference |
+| --- | --- | --- | --- |
+| CSID0 | `/soc/qcom,csid@1b30000` | `csi0_phy_clk` | `clk_gcc_camss_csi0phy_clk` |
+| CSID1 | `/soc/qcom,csid@1b30400` | `csi1_phy_clk` | `clk_gcc_camss_csi1phy_clk` |
+| CSID2 | `/soc/qcom,csid@1b30800` | `csi2_phy_clk` | `clk_gcc_camss_csi2phy_clk` |
+
+Probe and enable diagnostics identify the controller, actual DT node, and
+requested PHY clock. Clock order, DT rates, zero-rate handling, clock helper
+reference counting, and enable/disable unwind remain intact. The unrelated
+`camera_v2` driver is untouched.
+
+## Existing CSIPHY correction and diagnostics
 
 The three CSIPHY nodes at `1b34000`, `1b35000`, and `1b36000` have seven clock
 references but originally six names and rates. The verified order is:
@@ -45,14 +77,25 @@ Evidence in the pinned source:
   returns and cleanup flow.
 
 `scripts/patch_verify.py` validates ordering, provider IDs, precedent, the ARM64
-alias, and active driver selection before writing. It accepts the pristine or
-exactly patched state, rejects unexpected source, and is idempotent. Verify with:
+alias, active driver selection, and the complete pinned CSID source repair
+before writing. It upgrades pristine or fully repaired v1 inputs to v2, rejects
+partial repairs and unexpected source, and is idempotent. Verify with:
 
 ```sh
 python3 scripts/patch_verify.py --kernel /path/to/kernel --apply
 python3 scripts/patch_verify.py --kernel /path/to/kernel
 python3 scripts/test_patch_verify.py --kernel /path/to/kernel
+python3 scripts/test_csid_clock_ownership.py --kernel /path/to/patched/kernel
 ```
+
+The ownership test compiles the actual repaired clock parser with controlled
+host-side DT APIs. It checks that all three controllers retain independent
+metadata across probe orders and concurrent initialization, and exercises
+malformed clock input under AddressSanitizer and UndefinedBehaviorSanitizer.
+This test does not run the driver on hardware. Legacy v2.2 source slot zero and
+the shared source-selection helper's inherited reference/error behavior are
+preserved; SM-J727P uses CSID v3.5.1. Platform removal and the wider camera stack
+are outside this repair.
 
 ## Build and artifacts
 
@@ -70,12 +113,14 @@ with Python 3. Both prefixes are provided; this ARM64 tree does not build a
 
 After applying and verifying the patch, the build compares the generated diff
 with `patches/j727p-camera.patch`, generates the device configuration, compiles,
-and verifies the appended image and compiled CSIPHY device trees.
+and verifies the active CSID object, appended image, and compiled CSIPHY and
+CSID clock mappings in all six Sprint revision device trees.
 
 Successful builds upload `Image.gz-dtb`, the generated configuration, SHA-256
 checksums, and source/toolchain metadata. A separate artifact always uploads
 patches, scripts, configuration when available, and logs, including failed builds.
-Artifacts are retained for 30 days. Artifact downloads require GitHub sign-in.
+V2 artifact names start with `j727p-camera-v2-`. Artifacts are retained for
+30 days. Artifact downloads require GitHub sign-in.
 
 For local execution, install `build-essential bc bison flex libssl-dev libelf-dev
 python3 git curl xz-utils zip` and run:

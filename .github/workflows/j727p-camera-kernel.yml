@@ -1,4 +1,4 @@
-name: J727P camera kernel
+name: J727P camera kernel v2
 
 on:
   workflow_dispatch:
@@ -43,7 +43,7 @@ jobs:
           sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev \
             python3 git curl xz-utils zip 2>&1 | tee "$LOG_DIR/apt-install.log"
 
-      - name: Patch, verify, configure and compile
+      - name: Verify camera patch v2, configure and compile
         env:
           KERNEL_DIR: ${{ runner.temp }}/j727p-kernel
           TOOLCHAIN_DIR: ${{ runner.temp }}/android-gcc49
@@ -55,7 +55,7 @@ jobs:
         id: kernel
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: j727p-Image-gz-dtb-${{ github.run_id }}
+          name: j727p-camera-v2-Image-gz-dtb-${{ github.run_id }}
           path: |
             artifacts/Image.gz-dtb
             artifacts/kernel.config
@@ -70,7 +70,7 @@ jobs:
         id: diagnostics
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: j727p-patch-and-logs-${{ github.run_id }}
+          name: j727p-camera-v2-patch-and-logs-${{ github.run_id }}
           path: |
             logs/
             artifacts/
@@ -89,10 +89,12 @@ jobs:
           DIAGNOSTICS_URL: ${{ steps.diagnostics.outputs.artifact-url }}
         run: |
           {
-            echo "J727P kernel build: $JOB_STATUS"
+            echo "J727P camera patch v2 kernel build: $JOB_STATUS"
             echo
             echo "Source: Galaxy-MSM8953/android_kernel_samsung_msm8953 lineage-16.0"
             echo "Pinned source: 353d0e99d2e825e6517881c4df6011332aa75b31"
+            echo "Baseline successful run: https://github.com/${{ github.repository }}/actions/runs/37992808844"
+            echo "Repair: CSID0/1/2 each own their clock-information arrays; existing seven-clock CSIPHY corrections retained."
             echo "Kernel artifact: $KERNEL_URL"
             echo "Patch and logs: $DIAGNOSTICS_URL"
             echo

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Reproducible source and compiler selection for Samsung SM-J727P / LOS 16.
+# Reproducible source and compiler selection for Samsung SM-J727P / LOS 16,
+# camera patch v2 (per-controller CSID clocks and seven-clock CSIPHY DT).
 set -euo pipefail
 
 PROJECT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -59,7 +60,7 @@ export CROSS_COMPILE_ARM32="$TOOLCHAIN_DIR/arm/bin/arm-linux-androideabi-"
 export CROSS_COMPILE_COMPAT="$CROSS_COMPILE_ARM32"
 export PATH="$TOOLCHAIN_DIR/aarch64/bin:$TOOLCHAIN_DIR/arm/bin:$PATH"
 export KBUILD_BUILD_USER=github-actions KBUILD_BUILD_HOST=j727p-camera
-export KBUILD_BUILD_VERSION=1
+export KBUILD_BUILD_VERSION=2
 # Set this in the environment so subdirectory Makefiles can append include paths.
 export HOST_EXTRACFLAGS=-fcommon
 KBUILD_BUILD_TIMESTAMP=$(git -C "$KERNEL_DIR" show -s --format=%cI "$KERNEL_SHA")
@@ -72,9 +73,11 @@ python3 "${CROSS_COMPILE}gcc" --version | head -1 | grep -F '4.9'
 python3 "${CROSS_COMPILE_ARM32}gcc" --version | head -1 | grep -F '4.9'
 {
   printf 'device=SM-J727P\ncodename=j7popltespr\nandroid=LineageOS 16 / Android 9\n'
+  printf 'camera_patch_version=2\nbaseline_successful_workflow_run=37992808844\n'
   printf 'kernel_source=%s\naarch64_toolchain=%s\narm_toolchain=%s\n' \
     "$KERNEL_SHA" "$AARCH64_SHA" "$ARM_SHA"
   printf 'project_commit=%s\n' "$(git -C "$PROJECT_DIR" rev-parse HEAD)"
+  printf 'camera_patch_sha256=%s\n' "$(sha256sum "$PROJECT_DIR/patches/j727p-camera.patch" | cut -d ' ' -f 1)"
   printf 'timestamp=%s\n' "$KBUILD_BUILD_TIMESTAMP"
   printf 'host_extra_cflags=-fcommon\n'
 } > "$ARTIFACT_DIR/build-info.txt"
@@ -85,10 +88,14 @@ python3 "$PROJECT_DIR/scripts/patch_verify.py" --kernel "$KERNEL_DIR" --apply \
   2>&1 | tee "$LOG_DIR/patch-apply.log"
 python3 "$PROJECT_DIR/scripts/patch_verify.py" --kernel "$KERNEL_DIR" \
   2>&1 | tee "$LOG_DIR/patch-verify.log"
+python3 "$PROJECT_DIR/scripts/test_csid_clock_ownership.py" --kernel "$KERNEL_DIR" \
+  2>&1 | tee "$LOG_DIR/csid-clock-ownership.log"
 git -C "$KERNEL_DIR" diff --check
 git -C "$KERNEL_DIR" diff --binary --full-index -- \
   arch/arm/boot/dts/qcom/msm8953-camera.dtsi \
   drivers/media/platform/msm/camera_v2_j7poplte/common/msm_camera_io_util.c \
+  drivers/media/platform/msm/camera_v2_j7poplte/sensor/csid/msm_csid.c \
+  drivers/media/platform/msm/camera_v2_j7poplte/sensor/csid/msm_csid.h \
   > "$LOG_DIR/applied-camera.patch"
 cmp "$PROJECT_DIR/patches/j727p-camera.patch" "$LOG_DIR/applied-camera.patch"
 
@@ -108,4 +115,4 @@ python3 "$PROJECT_DIR/scripts/verify_image.py" --kernel "$KERNEL_DIR" --out "$OU
   2>&1 | tee "$LOG_DIR/image-verify.log"
 cp "$OUT_DIR/arch/arm64/boot/Image.gz-dtb" "$ARTIFACT_DIR/Image.gz-dtb"
 cp "$OUT_DIR/.config" "$ARTIFACT_DIR/kernel.config"
-echo 'Built Image.gz-dtb. Device boot and camera operation have not been tested.'
+echo 'Built camera patch v2 Image.gz-dtb. Device boot and camera operation have not been tested.'
