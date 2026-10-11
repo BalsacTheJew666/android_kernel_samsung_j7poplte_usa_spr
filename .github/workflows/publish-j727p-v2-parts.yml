@@ -1,0 +1,77 @@
+name: Publish J727P camera v2 kernel parts
+
+on:
+  push:
+    branches: [j727p-camera-build]
+    paths:
+      - '.github/workflows/publish-j727p-v2-parts.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Fetch verified v2 kernel build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p source
+          gh run download 38016519342 -R "${GITHUB_REPOSITORY}" -n j727p-camera-v2-Image-gz-dtb-38016519342 -D source
+          echo '947ffd2ffaa4b1fff85c2df179938d03a91109cebbc5191537c380d1c94ee9de  source/Image.gz-dtb' | sha256sum -c -
+
+      - name: Split compressed kernel and appended DTBs, verify exact hashes and package
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import pathlib
+          import zlib
+          import zipfile
+
+          source = pathlib.Path('source/Image.gz-dtb').read_bytes()
+          expected = {
+              'kernel': ('75798965cdd8db5ab160029d823b0513e7513f3f808616420018010b0c9763a2', 10993585),
+              'kernel_dtb': ('dba2efdf760f9ba305f572171722b774911047e5748187db65026bf718489779', 1544147),
+          }
+          size = expected['kernel'][1]
+          parts = {'kernel': source[:size], 'kernel_dtb': source[size:]}
+          decoder = zlib.decompressobj(31)
+          decoder.decompress(source)
+          decoder.flush()
+          assert len(source) - len(decoder.unused_data) == size, 'Invalid gzip/DTB split'
+          for name, data in parts.items():
+              digest, count = expected[name]
+              assert len(data) == count and hashlib.sha256(data).hexdigest() == digest, name
+          sums = ''.join(f'{expected[name][0]}  {name}\n' for name in ('kernel','kernel_dtb')).encode()
+          readme = (b'J727P LineageOS 16 Camera Kernel v2. Compiled kernel and appended DTBs split from verified build 38016519342. '
+                    b'These files are NOT flashable directly. Repack with the backed-up original Magisk boot image; '
+                    b'preserve the ramdisk, boot header and SEANDROID footer. Make an off-device backup before any flash.\n')
+          with zipfile.ZipFile('J727P-camera-v2-kernel-parts.zip', 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+              for name in ('kernel','kernel_dtb'):
+                  z.writestr(name,parts[name])
+              z.writestr('SHA256SUMS',sums)
+              z.writestr('README.txt',readme)
+          print('Package SHA256:', hashlib.sha256(pathlib.Path('J727P-camera-v2-kernel-parts.zip').read_bytes()).hexdigest())
+          PY
+
+      - name: Publish stable HTTPS release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG=j727p-camera-v2-kernel-parts-20261010
+          FILE=J727P-camera-v2-kernel-parts.zip
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$FILE" -R "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" "$FILE" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "J727P LineageOS 16 Camera Kernel v2 parts" \
+              --notes "Kernel and device-tree components from verified GitHub Actions run 38016519342. Not directly flashable. Keep an off-device backup of the original boot image."
+          fi
+          echo "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$FILE" >> "$GITHUB_STEP_SUMMARY"
