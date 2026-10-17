@@ -1,0 +1,6 @@
+[submodule "lineage16/kernel/samsung/msm8953"]
+	path = lineage16/kernel/samsung/msm8953
+	url = https://github.com/Galaxy-MSM8953/android_kernel_samsung_msm8953.git
+[submodule "lineage16/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"]
+	path = lineage16/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
+	url = https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git
