@@ -1,36 +1,52 @@
-# J727P LineageOS 16: Pinned Baseline
+# J727P LineageOS 16: pinned clean-source baseline
 
-This branch is a separate development/CI scaffold. **It is not a KernelSU build, a modified boot image, or a flashable zip.** The original repository master branch remains Linux 3.18.31 and is not overwritten.
+This is a non-flashing CI setup on a separate branch. **It is not KernelSU yet, and a produced Image.gz-dtb is NOT itself flashable.** The existing repository `master` (Linux 3.18.31) and camera build branch remain intact.
 
-## Verified source tree
+## Exact Linux 3.18.140 kernel tree
 
-- Device: Samsung Galaxy J7 Perx SM-J727P, codename `j7popltespr`, ARM64 MSM8953.
-- Upstream kernel: https://github.com/Galaxy-MSM8953/android_kernel_samsung_msm8953
-- Exact pinned kernel SHA: `353d0e99d2e825e6517881c4df6011332aa75b31`
-- Upstream branch: `lineage-16.0`
-- Submodule path in this repository: `lineage16/kernel/samsung/msm8953`
-- Kernel Linux release in Makefile: 3.18.140
-- Defconfig: `arch/arm64/configs/j7popltespr_defconfig`
-- Build output: `arch/arm64/boot/Image.gz-dtb`
-- Matching device configuration: https://github.com/Galaxy-MSM8953/android_device_samsung_j7popltespr/tree/lineage-16.0
-- ROM BoardConfig.mk uses `TARGET_KERNEL_SOURCE := kernel/samsung/msm8953` and `TARGET_KERNEL_CONFIG := j7popltespr_defconfig`.
+- Upstream: https://github.com/Galaxy-MSM8953/android_kernel_samsung_msm8953
+- Pinned revision: `353d0e99d2e825e6517881c4df6011332aa75b31` (`lineage-16.0`).
+- Pinned git submodule within this repository: `lineage16/kernel/samsung/msm8953`.
+- Source Makefile: Linux `3.18.140`.
+- Device defconfig: `arch/arm64/configs/j7popltespr_defconfig`.
+- Kernel build target: `Image.gz-dtb`.
+- Device tree: https://github.com/Galaxy-MSM8953/android_device_samsung_j7popltespr/tree/lineage-16.0
+- ROM BoardConfig.mk expects `kernel/samsung/msm8953` and `j7popltespr_defconfig`; the `lineage16/` directory is only a namespace to avoid overwriting the old source.
 
-## Cross compiler
+## Exact previously successful GCC 4.9 tools
 
-- Toolchain: https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9
-- Revision: `a61b4b9ea2a5098dbf113999526978aec683753b` (`lineage-17.1` branch when pinned)
-- Submodule: `lineage16/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9`
-- Compiler executable relative to this repository:
-  `lineage16/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android-gcc`
-- Compiler prefix: same path ending in `/bin/aarch64-linux-android-`.
+Recovered directly from `scripts/build_kernel.sh` on the existing `j727p-camera-build` branch:
 
-**The exact toolchain used by the historical 2019 `github-actions@j727p-camera` build is not known.** This pinned GCC 4.9 checkout is a reproducible candidate, not proof of a binary-identical rebuild.
+- AOSP ARM64 GCC 4.9 URL: https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
+- Revision: `961622e926a1b21382dba4dd9fe0e5fb3ee5ab7c` (`pie-release`).
+- AOSP 32-bit ARM GCC 4.9 URL: https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9
+- Revision: `cb7b3ac1b7fdb49474ff68761909934d1142f594` (`pie-release`).
+- These are pinned Git submodules under `lineage16/prebuilts/gcc/linux-x86/`.
 
-The older Linux 3.18.31 `build_kernel.sh` in the repository's master branch refers to `../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin`; do not use that older kernel configuration to build the LineageOS 16 baseline.
+Cross compile prefix (relative to checkout):
+`lineage16/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android-`.
 
-## Local setup / worktree audit
+ARM32 prefix:
+`lineage16/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/bin/arm-linux-androideabi-`.
 
-Clone this branch on a Linux PC or build runner, not on the phone with less than 1 GB of free storage:
+The AOSP GCC binaries are invoked through their Python 3 wrappers using `CC="python3 ${CROSS_COMPILE}gcc"`. The already successful camera workflow additionally used `HOST_EXTRACFLAGS=-fcommon`, `KBUILD_BUILD_USER=github-actions`, `KBUILD_BUILD_HOST=j727p-camera`, and `KBUILD_BUILD_VERSION=2`; our baseline script mirrors these.
+
+The old 3.18.31 `build_kernel.sh` expects a different relative compiler path and must not be used for this build.
+
+## Camera modifications are already preserved
+
+- Working CI script on existing branch: https://github.com/BalsacTheJew666/android_kernel_samsung_j7poplte_usa_spr/blob/j727p-camera-build/scripts/build_kernel.sh
+- Camera patch: https://github.com/BalsacTheJew666/android_kernel_samsung_j7poplte_usa_spr/blob/j727p-camera-build/patches/j727p-camera.patch
+- Successful camera-v2 build: https://github.com/BalsacTheJew666/android_kernel_samsung_j7poplte_usa_spr/actions/runs/38016519342
+- The camera-v2 publication workflow records extracted kernel SHA256 `75798965cdd8db5ab160029d823b0513e7513f3f808616420018010b0c9763a2`; this agrees with the actual kernel component extracted from the phone's verified boot backup.
+- The `-dirty` suffix on the phone's running kernel is consistent with that camera workflow applying its source patch to the clean baseline before compilation. It is not evidence of *current* uncommitted changes on a laptop.
+- This **baseline CI deliberately does NOT apply the camera patch**, so its output should not be flashed over the working phone's camera-v2 boot.
+
+## Inspect local uncommitted changes
+
+GitHub's hosted repository has committed objects; it cannot reveal a separate uncommitted `git diff` or untracked files on someone's laptop or phone. The pinned upstream kernel git commit itself is immutable, and CI refuses to build a dirty source checkout.
+
+On Linux (not on the phone, which has little free space):
 
 ```bash
 git clone -b j727p-lineage16-baseline-ci --recurse-submodules https://github.com/BalsacTheJew666/android_kernel_samsung_j7poplte_usa_spr.git j727p-baseline
@@ -38,20 +54,19 @@ cd j727p-baseline
 bash scripts/check-local-changes.sh
 ```
 
-The checked-out submodule source must be **clean**, including no staged or unstaged changes, before calling this a clean baseline. A GitHub hosted remote can show committed SHA and submodule pins but cannot reveal uncommitted files in someone else's PC checkout.
+If a checkout is dirty, preserve patches with `git diff --binary`, `git diff --cached --binary`, and copy untracked files. Do not reset or clean them before backing them up.
 
-The phone reports a running kernel release `3.18.140-g353d0e99-dirty`. The `-dirty` suffix indicates that the source worktree used for that build was not clean; the actual uncommitted changes are not available from the released commit SHA or extracted kernel. In particular, camera/torch changes need separate identification before flashing a replacement.
+## CI artifacts / logs
 
-## CI/build
+- Workflow: `.github/workflows/j727p-lineage16-baseline.yml`
+- Trigger: push to this branch or manual dispatch (depending on GitHub's default-branch workflow dispatch restrictions).
+- Runner: Ubuntu 22.04.
+- Script: `scripts/build-j727p-baseline.sh`.
+- Logs: `artifacts/setup.log` and `artifacts/build.log`.
+- On success: `artifacts/Image.gz-dtb`, `artifacts/kernel.config`, `artifacts/SHA256SUMS`, `artifacts/build-info.txt`.
+- Logs and whatever diagnostics exist are uploaded even when a build fails.
+- No ramdisk repacking, patched source, flashable zip, or root-manager replacement is performed.
 
-Workflow: `.github/workflows/j727p-lineage16-baseline.yml`.
+Reference phone boot: Android boot header version 0; pagesize 2048; gzip kernel; appended DTBs; gzip ramdisk; Samsung SEANDROID marker; boot partition 33554432 bytes. Verified boot backup SHA256: `f81ff20675f58f40d521059428e234656f6d4e099c6c1d485893454709cf86f6`. Keep boot backups off GitHub because they can contain device-specific data.
 
-Trigger by pushing to `j727p-lineage16-baseline-ci`; an optional manual dispatch is defined. The runner uses Ubuntu 22.04, checks out both pinned submodules, runs `scripts/build-j727p-baseline.sh`, captures `artifacts/build.log`, and uploads logs and any generated config/kernel images to GitHub Actions.
-
-The script stops if submodule SHAs do not match or either submodule is dirty. It does **not** make the resulting kernel bootable on its own.
-
-On a Linux PC with dependencies and initialized submodules, run `bash scripts/build-j727p-baseline.sh`. Generated files go outside this repository to `../j727p-build-out` and `../artifacts`.
-
-Known device boot reference: Android boot header v0, page size 2048, ramdisk gzip, appended 1.4 MB DTB, Samsung SEANDROID footer, partition size 33554432. Original phone boot backup SHA-256: `f81ff20675f58f40d521059428e234656f6d4e099c6c1d485893454709cf86f6`. **Never put the backup in the public GitHub repository**; it may contain device-specific data.
-
-No kernel modification, root-manager migration, or on-device flashing is performed by CI.
+**A green CI result proves compilation, not safe boot or KernelSU compatibility.** After baseline validation, next port KernelSU Next and reapply the known camera patch before any attempt to boot.
