@@ -1,0 +1,47 @@
+name: J727P LineageOS 16 baseline kernel
+
+on:
+  push:
+    branches:
+      - j727p-lineage16-baseline-ci
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    name: Build clean 3.18.140 baseline
+    runs-on: ubuntu-22.04
+    timeout-minutes: 110
+    steps:
+      - name: Check out CI repo and pinned source/toolchain submodules
+        uses: actions/checkout@v4
+        with:
+          path: ci
+          fetch-depth: 1
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install legacy kernel build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex build-essential make libssl-dev libncurses-dev \
+            cpio file python3 rsync git
+
+      - name: Build baseline and capture complete output
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          bash ci/scripts/build-j727p-baseline.sh 2>&1 | tee artifacts/build.log
+
+      - name: Upload baseline image, config, hashes, and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: j727p-lineage16-baseline-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 30
