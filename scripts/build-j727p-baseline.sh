@@ -1,56 +1,77 @@
 #!/usr/bin/env bash
-# Read-only for source checkouts. Compiles out of tree on Linux CI; does not flash.
+# Baseline only (no camera patches, no KernelSU). No flashing or boot image modifications.
 set -Eeuo pipefail
 
-REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
-if [ -n "$(printenv GITHUB_WORKSPACE || :)" ]; then
-  WORKSPACE=$(printenv GITHUB_WORKSPACE)
-else
-  WORKSPACE=$(dirname "$REPO_ROOT")
-fi
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+WORKSPACE=$(printenv GITHUB_WORKSPACE || :)
+if [ -z "$WORKSPACE" ]; then WORKSPACE=$(dirname "$ROOT"); fi
 
-SOURCE="$REPO_ROOT/lineage16/kernel/samsung/msm8953"
-TC="$REPO_ROOT/lineage16/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"
-CROSS="$TC/bin/aarch64-linux-android-"
+KERNEL="$ROOT/lineage16/kernel/samsung/msm8953"
+TC_ROOT="$ROOT/lineage16/prebuilts/gcc/linux-x86"
+AARCH64="$TC_ROOT/aarch64/aarch64-linux-android-4.9"
+ARM32="$TC_ROOT/arm/arm-linux-androideabi-4.9"
+KERNEL_SHA=353d0e99d2e825e6517881c4df6011332aa75b31
+AARCH64_SHA=961622e926a1b21382dba4dd9fe0e5fb3ee5ab7c
+ARM32_SHA=cb7b3ac1b7fdb49474ff68761909934d1142f594
 OUT="$WORKSPACE/j727p-build-out"
 ARTIFACTS="$WORKSPACE/artifacts"
-SOURCE_SHA=353d0e99d2e825e6517881c4df6011332aa75b31
-TOOLCHAIN_SHA=a61b4b9ea2a5098dbf113999526978aec683753b
-
 mkdir -p "$OUT" "$ARTIFACTS"
-echo "===== Exact source and compiler ====="
-test -f "$SOURCE/Makefile" || { echo "Missing kernel submodule. Run: git submodule update --init --recursive"; exit 2; }
-test -x "${CROSS}gcc" || { echo "Missing executable GCC 4.9 submodule compiler"; exit 2; }
 
-test "$(git -C "$SOURCE" rev-parse HEAD)" = "$SOURCE_SHA" || { echo "Kernel source SHA mismatch"; exit 2; }
-test "$(git -C "$TC" rev-parse HEAD)" = "$TOOLCHAIN_SHA" || { echo "Toolchain SHA mismatch"; exit 2; }
+echo "===== Require exact clean kernel / GCC 4.9 commits ====="
+for pair in "$KERNEL:$KERNEL_SHA" "$AARCH64:$AARCH64_SHA" "$ARM32:$ARM32_SHA"; do
+  directory=$(printf '%s' "$pair" | cut -d: -f1)
+  revision=$(printf '%s' "$pair" | cut -d: -f2)
+  test -e "$directory/.git" || { echo "Submodule not initialized: $directory"; exit 2; }
+  actual=$(git -C "$directory" rev-parse HEAD)
+  test "$actual" = "$revision" || { echo "Revision mismatch: $directory $actual"; exit 2; }
+  if [ -n "$(git -C "$directory" status --porcelain --untracked-files=normal)" ]; then
+    echo "Dirty submodule: $directory"
+    git -C "$directory" status --short
+    exit 2
+  fi
+done
 
-if [ -n "$(git -C "$SOURCE" status --porcelain --untracked-files=normal)" ]; then
-  echo "STOP: source checkout contains local changes:"
-  git -C "$SOURCE" status --short
-  exit 2
-fi
-if [ -n "$(git -C "$TC" status --porcelain --untracked-files=normal)" ]; then
-  echo "STOP: toolchain checkout contains local changes:"
-  git -C "$TC" status --short
-  exit 2
-fi
+export ARCH=arm64 SUBARCH=arm64
+export CROSS_COMPILE="$AARCH64/bin/aarch64-linux-android-"
+export CROSS_COMPILE_ARM32="$ARM32/bin/arm-linux-androideabi-"
+export CROSS_COMPILE_COMPAT="$CROSS_COMPILE_ARM32"
+export PATH="$AARCH64/bin:$ARM32/bin:$PATH"
+export KBUILD_BUILD_USER=github-actions KBUILD_BUILD_HOST=j727p-camera
+export KBUILD_BUILD_VERSION=2
+export HOST_EXTRACFLAGS=-fcommon
+KBUILD_BUILD_TIMESTAMP=$(git -C "$KERNEL" show -s --format=%cI "$KERNEL_SHA")
+export KBUILD_BUILD_TIMESTAMP
 
-printf 'Kernel source SHA: %s\nToolchain SHA: %s\n' "$SOURCE_SHA" "$TOOLCHAIN_SHA" | tee "$ARTIFACTS/source-revisions.txt"
-head -3 "$SOURCE/Makefile" | tee -a "$ARTIFACTS/source-revisions.txt"
-"${CROSS}gcc" --version | head -1 | tee "$ARTIFACTS/compiler-version.txt"
-echo "Host build compiler: $(gcc --version | head -1)"
-echo "Host make: $(make --version | head -1)"
+test -f "${CROSS_COMPILE}gcc" || { echo "Missing AOSP GCC wrapper"; exit 2; }
+test -f "${CROSS_COMPILE_ARM32}gcc" || { echo "Missing AOSP ARM GCC wrapper"; exit 2; }
+python3 "${CROSS_COMPILE}gcc" --version | tee "$ARTIFACTS/gcc-aarch64-version.txt"
+python3 "${CROSS_COMPILE_ARM32}gcc" --version | tee "$ARTIFACTS/gcc-arm-version.txt"
+python3 "${CROSS_COMPILE}gcc" --version | head -1 | grep -F '4.9'
+python3 "${CROSS_COMPILE_ARM32}gcc" --version | head -1 | grep -F '4.9'
 
-echo "===== Produce baseline defconfig ====="
-make -C "$SOURCE" O="$OUT" ARCH=arm64 CROSS_COMPILE="$CROSS" j7popltespr_defconfig
-cp "$OUT/.config" "$ARTIFACTS/j7popltespr.config"
+{
+  echo "kernel_sha=$KERNEL_SHA"
+  echo "aarch64_toolchain_sha=$AARCH64_SHA"
+  echo "arm32_toolchain_sha=$ARM32_SHA"
+  echo "kernel_patch=NONE (clean baseline)"
+  echo "timestamp=$KBUILD_BUILD_TIMESTAMP"
+  echo "source_config=arch/arm64/configs/j7popltespr_defconfig"
+  echo "running_device_kernel=3.18.140-g353d0e99-dirty (not a clean-source match)"
+} > "$ARTIFACTS/build-info.txt"
 
-echo "===== Compile Image.gz-dtb; no KernelSU patches ====="
-make -C "$SOURCE" O="$OUT" ARCH=arm64 CROSS_COMPILE="$CROSS" -j2 Image.gz-dtb
+make_args=(-C "$KERNEL" O="$OUT" ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="python3 ${CROSS_COMPILE}gcc")
+echo "===== Generate j7popltespr defconfig ====="
+make "${make_args[@]}" j7popltespr_defconfig
+cp "$OUT/.config" "$ARTIFACTS/kernel.config"
+for setting in CONFIG_ARM64=y CONFIG_ARCH_MSM8953=y CONFIG_SEC_J7POPLTE_USA_SPR=y CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE=y; do
+  grep -Fx "$setting" "$OUT/.config"
+done
 
+echo "===== Compile clean LineageOS 16 kernel ====="
+make "${make_args[@]}" -j2 Image.gz-dtb
 IMAGE="$OUT/arch/arm64/boot/Image.gz-dtb"
 test -s "$IMAGE"
-cp "$IMAGE" "$ARTIFACTS/J727P-baseline-Image.gz-dtb"
-sha256sum "$ARTIFACTS/J727P-baseline-Image.gz-dtb" | tee "$ARTIFACTS/SHA256SUMS"
-echo "BASELINE BUILD SUCCESS (not a flashable boot image)"
+gzip -t "$OUT/arch/arm64/boot/Image.gz"
+cp "$IMAGE" "$ARTIFACTS/Image.gz-dtb"
+(cd "$ARTIFACTS" && sha256sum Image.gz-dtb kernel.config > SHA256SUMS)
+echo "CLEAN BASELINE KERNEL BUILT — Not a boot image; do not flash."
